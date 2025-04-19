@@ -1,4 +1,3 @@
-import os
 import sqlite3
 import base64
 from flask import Flask, request, jsonify
@@ -14,12 +13,15 @@ def init_db():
     c = conn.cursor()
 
     # Create tables
+
+    # Stores the ids of existing checklists
     c.execute('''
         CREATE TABLE IF NOT EXISTS checklists (
             id INTEGER PRIMARY KEY AUTOINCREMENT
         )
     ''')
 
+    # Stores ids of each category of each checklist and relates them to the checklist id they are contained in
     c.execute('''
         CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,6 +31,7 @@ def init_db():
         )
     ''')
 
+    # Stores file contents and metadata for each file in each category and relates them to the category id they are contained in
     c.execute('''
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,10 +45,15 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
 
 @app.route('/save_checklist', methods=['POST'])
 def save_checklist():
+    """
+    API endpoint for 1) saving a new checklist and 2) updating an existing checklist.
+
+    First checks checklistId of incoming request. If this exists in the database, erase the categories, files, and metadata currently associated with that checklistId so a clean write can occur with new data. If checklistId does not currently exist in the database, create new entries for request.
+    """
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
@@ -57,16 +65,17 @@ def save_checklist():
     exists = c.fetchone() is not None
 
     if exists:
-        # Delete files
+        # Updating existing file, clear up data first
         c.execute("SELECT id FROM categories WHERE checklist_id = ?", (checklistId,))
         category_ids = [row[0] for row in c.fetchall()]
         if category_ids:
+            # Delete files
             placeholders = ','.join(['?'] * len(category_ids))
             c.execute(f"DELETE FROM files WHERE category_id IN ({placeholders})", category_ids)
         # Delete categories
         c.execute("DELETE FROM categories WHERE checklist_id = ?", (checklistId,))
     else:
-        # Create new checklist
+        # Create new row for data entry
         c.execute("INSERT INTO checklists DEFAULT VALUES")
         checklistId = c.lastrowid
 
@@ -94,18 +103,25 @@ def save_checklist():
     conn.commit()
     conn.close()
 
-    return jsonify({"status": "success", "checklist_id": checklistId})
-
+    return jsonify({"status": 200, "checklist_id": checklistId})
 
 
 @app.route('/clone_checklist/<int:checklist_id>', methods=['GET'])
 def clone_checklist(checklist_id):
-    print("here")
+    """
+    API endpoint for extracting an existing checklist from the database for cloning or updating.
+
+    Using the checklist_id, first extracts all the category ids that have checklist_id as foreign key. Then extracts all files that have the category_id as foreign key. If no such checklist_id exists, returns an empty array
+    """
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
     c.execute('SELECT id, name FROM categories WHERE checklist_id = ?', (checklist_id,))
     categories = c.fetchall()
+
+    if len(categories) == 0:
+        return jsonify("out of range")
 
     result = []
     for cat_id, cat_name in categories:
@@ -126,6 +142,10 @@ def clone_checklist(checklist_id):
 
 @app.route('/get_all_checklists', methods=['GET'])
 def get_all_checklists():
+    """
+    API endpoint for returning all checklist_ids, used for debugging
+    """
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
@@ -139,6 +159,10 @@ def get_all_checklists():
 
 @app.route('/get_next_available_id', methods=['GET'])
 def get_next_checklist_id():
+    """
+    API endpoint for returning the next available (unused) checklist_id. Called by the frontend to assign a valid id to the new checklist being created, allowing save_checklist to determine whether an update or new insertion takes place.
+    """
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT MAX(id) FROM checklists")
@@ -151,6 +175,10 @@ def get_next_checklist_id():
     
 @app.route('/append_files', methods=['POST'])
 def append_files():
+    """
+    API endpoint for third party file uploading. Third party users cannot change the existing structure of the checklist, but they can upload / rename new files.
+    """
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
@@ -187,5 +215,6 @@ def append_files():
     conn.close()
     return jsonify({"status": "success"})
 
-
-app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, port=5000)
