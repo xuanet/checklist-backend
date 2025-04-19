@@ -49,20 +49,37 @@ def save_checklist():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    c.execute('INSERT INTO checklists DEFAULT VALUES')
-    checklist_id = c.lastrowid
-
     form = request.form
     files = request.files
 
+    checklistId = int(form['checklistId'])
+    c.execute("SELECT 1 FROM checklists WHERE id = ?", (checklistId,))
+    exists = c.fetchone() is not None
+
+    if exists:
+        # Delete files
+        c.execute("SELECT id FROM categories WHERE checklist_id = ?", (checklistId,))
+        category_ids = [row[0] for row in c.fetchall()]
+        if category_ids:
+            placeholders = ','.join(['?'] * len(category_ids))
+            c.execute(f"DELETE FROM files WHERE category_id IN ({placeholders})", category_ids)
+        # Delete categories
+        c.execute("DELETE FROM categories WHERE checklist_id = ?", (checklistId,))
+    else:
+        # Create new checklist
+        c.execute("INSERT INTO checklists DEFAULT VALUES")
+        checklistId = c.lastrowid
+
+    # Add categories
     categories = {}
     for key in form:
         if key.startswith("categories[") and key.endswith("][name]"):
             index = key.split("[")[1].split("]")[0]
             name = form[key]
-            c.execute('INSERT INTO categories (checklist_id, name) VALUES (?, ?)', (checklist_id, name))
+            c.execute('INSERT INTO categories (checklist_id, name) VALUES (?, ?)', (checklistId, name))
             categories[index] = c.lastrowid
 
+    # Add files
     for key in files:
         parts = key.split("[")
         cat_idx = parts[1].split("]")[0]
@@ -76,11 +93,14 @@ def save_checklist():
 
     conn.commit()
     conn.close()
-    return jsonify({"status": "success", "checklist_id": checklist_id})
+
+    return jsonify({"status": "success", "checklist_id": checklistId})
+
 
 
 @app.route('/clone_checklist/<int:checklist_id>', methods=['GET'])
 def clone_checklist(checklist_id):
+    print("here")
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
@@ -104,4 +124,68 @@ def clone_checklist(checklist_id):
 
     return jsonify(result)
 
-app.run(port=5000)
+@app.route('/get_all_checklists', methods=['GET'])
+def get_all_checklists():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute('SELECT id FROM checklists')
+    rows = c.fetchall()
+
+    checklist_ids = [row[0] for row in rows]
+
+    conn.close()
+    return jsonify(checklist_ids)
+
+@app.route('/get_next_available_id', methods=['GET'])
+def get_next_checklist_id():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT MAX(id) FROM checklists")
+    row = c.fetchone()
+    print(row)
+    if row[0] is None:
+        return jsonify(1)
+    else:
+        return jsonify(row[0]+1)
+    
+@app.route('/append_files', methods=['POST'])
+def append_files():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    form = request.form
+    files = request.files
+    checklistId = int(form['checklistId'])
+
+    c.execute("SELECT 1 FROM checklists WHERE id = ?", (checklistId,))
+    if not c.fetchone():
+        return jsonify({"error": "Checklist not found"}), 404
+
+    for key in files:
+        if key.startswith("categories["):
+            parts = key.split("[")
+            cat_idx = parts[1].split("]")[0]
+            file = files[key]
+            filename_key = f"categories[{cat_idx}][files_rename][{key.split('[')[3].split(']')[0]}]"
+            new_filename = form.get(filename_key, file.filename)
+
+            c.execute(
+                "SELECT id FROM categories WHERE checklist_id = ? LIMIT 1 OFFSET ?",
+                (checklistId, cat_idx)
+            )
+            row = c.fetchone()
+            if row:
+                cat_id = row[0]
+                content = file.read()
+                c.execute(
+                    'INSERT INTO files (category_id, filename, content) VALUES (?, ?, ?)',
+                    (cat_id, new_filename, content)
+                )
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+
+app.run(debug=True, port=5000)
