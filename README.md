@@ -2,6 +2,8 @@
 
 This repo implements the server and database of the Checklist application. The server is implemented in Flask running on port 5000, and the database is sqlite. The database is persistent across the same instance of the server/docker container.
 
+Run this container first before running the frontend `https://github.com/xuanet/checklist-frontend`
+
 ## Execution
 
 Build the docker image
